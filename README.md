@@ -3,6 +3,24 @@
 GitHub Action that syncs tracked Markdown files from a repository into a
 QDivZero Retrieval database.
 
+The action sends one document per file. The Retrieval API handles heading
+detection, chunking, chunk IDs, and per-document chunk replacement.
+
+## Releases
+
+- `@v1`: current major release. Recommended for normal use.
+- `@v1.0.0`: immutable release.
+
+For stricter supply-chain control, pin the action to the release commit SHA.
+
+## Prerequisites
+
+- A QDivZero account API key (`tk_<prefix>.<secret>`) with access to Retrieval.
+- A Retrieval database and its slug or ID.
+- The database's embedding deployment running when documents are indexed.
+
+Store the API key as a repository secret named `QDIVZERO_API_KEY`.
+
 ## Usage
 
 ```yaml
@@ -26,10 +44,10 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: QDivZero/qdivzero-gha-sync-retrieval@v1
         with:
-          api-key: ${{ secrets.QDIV0_API_KEY }}
+          api-key: ${{ secrets.QDIVZERO_API_KEY }}
           database-slug: my-repo-docs
 ```
 
@@ -40,7 +58,7 @@ ID. Exactly one of the two inputs is required.
 
 | Input | Required | Default | Description |
 | --- | --- | --- | --- |
-| `api-key` | Yes | - | QDivZero API key. |
+| `api-key` | Yes | - | QDivZero account API key. |
 | `database-id` | One of | - | Retrieval database ID. |
 | `database-slug` | One of | - | Retrieval database slug, resolved through the list endpoint. |
 | `base-url` | No | `https://api.qdiv0.com` | QDivZero API base URL. |
@@ -62,13 +80,35 @@ ID. Exactly one of the two inputs is required.
 - Enumerates tracked Markdown with `git ls-files`.
 - Sends one document per file with `id = md5(relative_path)` and the full
   Markdown content.
-- Adds file-level metadata: repository, path, ref, commit, title, and URL.
+- Adds file-level metadata: action, repository, path, ref, commit, title, and
+  URL.
 - The Retrieval API handles heading detection, chunking, and chunk IDs.
 - Re-indexing the same document replaces its previous chunks.
 - Empty files are skipped.
 - Sends sequential batches to `index-direct` with retries on 429/5xx/network
   errors.
 - Publishes a step summary and the outputs above.
+
+## Verify the index
+
+Use the `database-id` output, or resolve the slug first, and search the
+database:
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer ${QDIVZERO_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -X POST "https://api.qdiv0.com/v1/flexible-vector-databases/<database-id>/search" \
+  -d '{"query":"your question","top_k":5}'
+```
+
+## Troubleshooting
+
+- `401 invalid access token`: use a valid QDivZero account API key (`tk_...`)
+  and confirm that it can access Retrieval.
+- Slug not found: check the slug and the account that owns the database.
+- No documents indexed: confirm that the Markdown files are tracked by Git and
+  match `paths`/`exclude`.
 
 ## Limitations
 
