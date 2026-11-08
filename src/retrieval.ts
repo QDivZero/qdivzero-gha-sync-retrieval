@@ -3,6 +3,8 @@ import type { IndexDocument } from "./documents.js";
 
 const TRANSIENT_STATUS = new Set([429, 500, 502, 503, 504]);
 const RETRY_DELAYS = [1000, 2000];
+const MAX_BATCH_BYTES = 12 * 1024 * 1024;
+const MAX_BATCH_CHUNKS = 10000;
 
 export class ApiError extends Error {
   constructor(
@@ -16,8 +18,10 @@ export class ApiError extends Error {
 
 export interface RetrievalApi {
   listDatabases(): Promise<unknown>;
-  indexDirect(databaseId: string, documents: IndexDocument[]): Promise<unknown>;
+  indexDirect(databaseId: string, documents: IndexDocument[], chunking?: ChunkingConfig): Promise<unknown>;
 }
+
+export interface ChunkingConfig { size: number; overlap: number }
 
 export interface DatabaseRef {
   id?: string;
@@ -51,12 +55,13 @@ export function createRetrievalApi(client: QDivZeroClient): RetrievalApi {
       return data;
     },
 
-    async indexDirect(databaseId: string, documents: IndexDocument[]): Promise<unknown> {
+    async indexDirect(databaseId: string, documents: IndexDocument[], chunking?: ChunkingConfig): Promise<unknown> {
+      const body = { documents, ...(chunking === undefined ? {} : { chunking }) };
       const { data, error, response } = await client.POST(
         "/flexible-vector-databases/{databaseID}/index-direct",
         {
           params: { path: { databaseID: databaseId } },
-          body: { documents },
+          body,
         },
       );
       if (response.status !== 200) {
@@ -144,6 +149,34 @@ export function* batchDocuments<T>(items: T[], batchSize: number): Generator<T[]
   }
 }
 
+export function* batchIndexDocuments(documents: IndexDocument[], batchSize: number, chunking?: ChunkingConfig, maxBytes = MAX_BATCH_BYTES): Generator<IndexDocument[]> {
+  if (!Number.isInteger(batchSize) || batchSize < 1) throw new Error("batchSize must be a positive integer.");
+  const baseBytes = Buffer.byteLength(JSON.stringify({ documents: [], ...(chunking === undefined ? {} : { chunking }) }), "utf8");
+  let batch: IndexDocument[] = [];
+  let bytes = baseBytes;
+  let chunks = 0;
+  for (const document of documents) {
+    const documentBytes = Buffer.byteLength(JSON.stringify(document), "utf8");
+    if (baseBytes + documentBytes > maxBytes) throw new Error(`Document ${document.id} is too large for a single indexing request.`);
+    let chars = 0;
+    for (const _character of document.content) chars += 1;
+    const { size, overlap } = chunking ?? { size: 2000, overlap: 200 };
+    const chunkCount = chars <= size ? 1 : 1 + Math.ceil((chars - size) / (size - overlap));
+    if (chunkCount > MAX_BATCH_CHUNKS) throw new Error(`Document ${document.id} would create too many chunks.`);
+    const added = documentBytes + (batch.length === 0 ? 0 : 1);
+    if (batch.length >= batchSize || bytes + added > maxBytes || chunks + chunkCount > MAX_BATCH_CHUNKS) {
+      yield batch;
+      batch = [];
+      bytes = baseBytes;
+      chunks = 0;
+    }
+    bytes += documentBytes + (batch.length === 0 ? 0 : 1);
+    chunks += chunkCount;
+    batch.push(document);
+  }
+  if (batch.length > 0) yield batch;
+}
+
 function isTransient(error: unknown): boolean {
   if (error instanceof ApiError) {
     return error.status !== undefined && TRANSIENT_STATUS.has(error.status);
@@ -156,11 +189,11 @@ async function indexBatchWithRetry(
   databaseId: string,
   documents: IndexDocument[],
   sleep: (ms: number) => Promise<void>,
-): Promise<void> {
+  chunking?: ChunkingConfig,
+): Promise<unknown> {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      await api.indexDirect(databaseId, documents);
-      return;
+      return await api.indexDirect(databaseId, documents, chunking);
     } catch (error) {
       if (!isTransient(error) || attempt >= RETRY_DELAYS.length) {
         throw error;
@@ -173,6 +206,8 @@ async function indexBatchWithRetry(
 export interface IndexAllOptions {
   sleep?: (ms: number) => Promise<void>;
   onBatch?: (info: { batch: number; totalBatches: number; size: number }) => void;
+  chunking?: ChunkingConfig;
+  requireIndexedCount?: boolean;
 }
 
 export async function indexAll(
@@ -181,17 +216,28 @@ export async function indexAll(
   documents: IndexDocument[],
   batchSize: number,
   options: IndexAllOptions = {},
-): Promise<{ indexed: number; batches: number }> {
-  const batches = [...batchDocuments(documents, batchSize)];
+): Promise<{ indexed: number; batches: number; chunksIndexed?: number }> {
+  const batches = [...batchIndexDocuments(documents, batchSize, options.chunking)];
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let indexed = 0;
+  let chunksIndexed = 0;
+  let hasChunkCounts = true;
 
   for (let index = 0; index < batches.length; index += 1) {
     const batch = batches[index];
     options.onBatch?.({ batch: index + 1, totalBatches: batches.length, size: batch.length });
-    await indexBatchWithRetry(api, databaseId, batch, sleep);
+    const response = await indexBatchWithRetry(api, databaseId, batch, sleep, options.chunking);
+    if ((options.requireIndexedCount && (!isRecord(response) || response.indexed_count === undefined)) ||
+        (isRecord(response) && response.indexed_count !== undefined && response.indexed_count !== batch.length)) {
+      throw new Error(`index-direct returned an unexpected indexed_count for batch ${index + 1}.`);
+    }
     indexed += batch.length;
+    if (isRecord(response) && Number.isSafeInteger(response.chunks_indexed_count) && (response.chunks_indexed_count as number) >= 0) {
+      chunksIndexed += response.chunks_indexed_count as number;
+    } else {
+      hasChunkCounts = false;
+    }
   }
 
-  return { indexed, batches: batches.length };
+  return { indexed, batches: batches.length, ...(hasChunkCounts && batches.length > 0 ? { chunksIndexed } : {}) };
 }

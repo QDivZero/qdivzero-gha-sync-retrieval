@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { InputError, readGitHubContext, readInputs } from "../src/inputs.js";
+import { InputError, readGitHubContext, readInputs, versionedBaseUrl } from "../src/inputs.js";
 
 const baseEnv = {
   "INPUT_API-KEY": "tk_test.secret",
@@ -11,6 +11,10 @@ const baseEnv = {
 };
 
 describe("readInputs", () => {
+  it("constructs the canonical v1 base URL without duplicating it", () => {
+    expect(versionedBaseUrl("https://example.test")).toBe("https://example.test/v1");
+    expect(versionedBaseUrl("https://example.test/v1/")).toBe("https://example.test/v1");
+  });
   it("parses defaults and multiline patterns", () => {
     const inputs = readInputs(baseEnv);
     expect(inputs).toEqual({
@@ -21,6 +25,8 @@ describe("readInputs", () => {
       paths: ["docs/**/*.md", "README.md"],
       exclude: ["docs/private/**"],
       batchSize: 25,
+      prune: false,
+      removeLegacy: false,
     });
   });
 
@@ -50,9 +56,22 @@ describe("readInputs", () => {
     expect(() => readInputs({ ...baseEnv, "INPUT_BATCH-SIZE": "0" })).toThrow(/batch-size/i);
   });
 
+  it("accepts explicit server-side chunk settings and rejects partial or unsafe settings", () => {
+	const inputs = readInputs({ ...baseEnv, "INPUT_CHUNK-SIZE": "2000", "INPUT_CHUNK-OVERLAP": "200" });
+	expect(inputs.chunking).toEqual({ size: 2000, overlap: 200 });
+	expect(() => readInputs({ ...baseEnv, "INPUT_CHUNK-SIZE": "2000" })).toThrow(/both/i);
+	expect(() => readInputs({ ...baseEnv, "INPUT_CHUNK-SIZE": "100", "INPUT_CHUNK-OVERLAP": "51" })).toThrow(/overlap/i);
+  });
+
   it("rejects invalid base URLs", () => {
     expect(() => readInputs({ ...baseEnv, "INPUT_BASE-URL": "ftp://example.com" })).toThrow(/http/i);
     expect(() => readInputs({ ...baseEnv, "INPUT_BASE-URL": "not a url" })).toThrow(/valid URL/i);
+  });
+
+  it("requires explicit opt-in for cleanup", () => {
+    expect(readInputs(baseEnv).prune).toBe(false);
+    expect(readInputs({ ...baseEnv, "INPUT_PRUNE": "true" }).prune).toBe(true);
+    expect(() => readInputs({ ...baseEnv, "INPUT_PRUNE": "sometimes" })).toThrow(/prune/i);
   });
 });
 

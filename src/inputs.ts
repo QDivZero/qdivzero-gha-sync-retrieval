@@ -13,6 +13,9 @@ export interface ActionInputs {
   paths: string[];
   exclude: string[];
   batchSize: number;
+  chunking?: { size: number; overlap: number };
+  prune: boolean;
+  removeLegacy: boolean;
 }
 
 export interface GitHubContext {
@@ -64,6 +67,21 @@ function normalizeBaseUrl(raw: string): string {
   return value;
 }
 
+export function versionedBaseUrl(raw: string): string {
+  const url = new URL(normalizeBaseUrl(raw));
+  if (url.search || url.hash) throw new InputError("Input base-url must not contain a query or fragment.");
+  const path = url.pathname.replace(/\/+$/, "");
+  url.pathname = path.endsWith("/v1") ? path : `${path}/v1`;
+  return url.toString().replace(/\/+$/, "");
+}
+
+function parseBoolean(env: NodeJS.ProcessEnv, name: string): boolean {
+  const value = input(env, name).toLowerCase();
+  if (value === "" || value === "false") return false;
+  if (value === "true") return true;
+  throw new InputError(`Input ${name} must be true or false.`);
+}
+
 function requiredEnv(env: NodeJS.ProcessEnv, name: string): string {
   const value = (env[name] ?? "").trim();
   if (value === "") throw new InputError(`Environment variable ${name} is required.`);
@@ -80,6 +98,21 @@ export function readInputs(env: NodeJS.ProcessEnv = process.env): ActionInputs {
     throw new InputError("Provide exactly one of database-id or database-slug.");
   }
 
+  const rawChunkSize = input(env, "chunk-size");
+  const rawOverlap = input(env, "chunk-overlap");
+  if ((rawChunkSize === "") !== (rawOverlap === "")) {
+    throw new InputError("Provide both chunk-size and chunk-overlap, or omit both.");
+  }
+  let chunking: ActionInputs["chunking"];
+  if (rawChunkSize !== "") {
+    const size = parseInteger(env, "chunk-size", 0, 1, 20000);
+    const overlap = parseInteger(env, "chunk-overlap", 0, 0, 10000);
+    if (overlap >= size || overlap > Math.floor(size / 2)) {
+      throw new InputError("Input chunk-overlap must be less than the size and at most half of it.");
+    }
+    chunking = { size, overlap };
+  }
+
   return {
     apiKey,
     databaseId,
@@ -88,6 +121,9 @@ export function readInputs(env: NodeJS.ProcessEnv = process.env): ActionInputs {
     paths: parseLines(input(env, "paths")),
     exclude: parseLines(input(env, "exclude")),
     batchSize: parseInteger(env, "batch-size", 50, 1, 200),
+    prune: parseBoolean(env, "prune"),
+    removeLegacy: parseBoolean(env, "remove-legacy"),
+    ...(chunking === undefined ? {} : { chunking }),
   };
 }
 

@@ -20319,6 +20319,19 @@ function normalizeBaseUrl(raw) {
   }
   return value;
 }
+function versionedBaseUrl(raw) {
+  const url = new URL(normalizeBaseUrl(raw));
+  if (url.search || url.hash) throw new InputError("Input base-url must not contain a query or fragment.");
+  const path2 = url.pathname.replace(/\/+$/, "");
+  url.pathname = path2.endsWith("/v1") ? path2 : `${path2}/v1`;
+  return url.toString().replace(/\/+$/, "");
+}
+function parseBoolean(env, name) {
+  const value = input(env, name).toLowerCase();
+  if (value === "" || value === "false") return false;
+  if (value === "true") return true;
+  throw new InputError(`Input ${name} must be true or false.`);
+}
 function requiredEnv(env, name) {
   const value = (env[name] ?? "").trim();
   if (value === "") throw new InputError(`Environment variable ${name} is required.`);
@@ -20332,6 +20345,20 @@ function readInputs(env = process.env) {
   if ((databaseId ? 1 : 0) + (databaseSlug ? 1 : 0) !== 1) {
     throw new InputError("Provide exactly one of database-id or database-slug.");
   }
+  const rawChunkSize = input(env, "chunk-size");
+  const rawOverlap = input(env, "chunk-overlap");
+  if (rawChunkSize === "" !== (rawOverlap === "")) {
+    throw new InputError("Provide both chunk-size and chunk-overlap, or omit both.");
+  }
+  let chunking;
+  if (rawChunkSize !== "") {
+    const size = parseInteger(env, "chunk-size", 0, 1, 2e4);
+    const overlap = parseInteger(env, "chunk-overlap", 0, 0, 1e4);
+    if (overlap >= size || overlap > Math.floor(size / 2)) {
+      throw new InputError("Input chunk-overlap must be less than the size and at most half of it.");
+    }
+    chunking = { size, overlap };
+  }
   return {
     apiKey,
     databaseId,
@@ -20339,7 +20366,10 @@ function readInputs(env = process.env) {
     baseUrl: normalizeBaseUrl(input(env, "base-url") || "https://api.qdiv0.com"),
     paths: parseLines(input(env, "paths")),
     exclude: parseLines(input(env, "exclude")),
-    batchSize: parseInteger(env, "batch-size", 50, 1, 200)
+    batchSize: parseInteger(env, "batch-size", 50, 1, 200),
+    prune: parseBoolean(env, "prune"),
+    removeLegacy: parseBoolean(env, "remove-legacy"),
+    ...chunking === void 0 ? {} : { chunking }
   };
 }
 function readGitHubContext(env = process.env, cwd = process.cwd()) {
@@ -22687,6 +22717,11 @@ minimatch.unescape = unescape;
 
 // src/git.ts
 var execFileAsync = (0, import_node_util.promisify)(import_node_child_process.execFile);
+function matchesMarkdownPath(file, include, exclude) {
+  if (!/\.md$/i.test(file)) return false;
+  const included = include.length === 0 || include.some((pattern) => minimatch(file, pattern, { dot: true }));
+  return included && !exclude.some((pattern) => minimatch(file, pattern, { dot: true }));
+}
 async function listTrackedMarkdown(workspace, include, exclude) {
   let stdout;
   try {
@@ -22698,11 +22733,7 @@ async function listTrackedMarkdown(workspace, include, exclude) {
     const message = error2 instanceof Error ? error2.message : String(error2);
     throw new Error(`Unable to list tracked files in ${workspace}: ${message}`);
   }
-  return stdout.split("\0").filter((file) => file.length > 0 && /\.md$/i.test(file)).map((file) => file.replaceAll("\\", "/")).filter((file) => {
-    const included = include.length === 0 || include.some((pattern) => minimatch(file, pattern, { dot: true }));
-    if (!included) return false;
-    return !exclude.some((pattern) => minimatch(file, pattern, { dot: true }));
-  }).sort();
+  return stdout.split("\0").filter((file) => file.length > 0 && /\.md$/i.test(file)).map((file) => file.replaceAll("\\", "/")).filter((file) => matchesMarkdownPath(file, include, exclude)).sort();
 }
 
 // src/documents.ts
@@ -22736,6 +22767,8 @@ function buildDocument(relativePath, content, context) {
 // src/retrieval.ts
 var TRANSIENT_STATUS = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
 var RETRY_DELAYS = [1e3, 2e3];
+var MAX_BATCH_BYTES = 12 * 1024 * 1024;
+var MAX_BATCH_CHUNKS = 1e4;
 var ApiError = class extends Error {
   constructor(message, status) {
     super(message);
@@ -22768,12 +22801,13 @@ function createRetrievalApi(client) {
       }
       return data;
     },
-    async indexDirect(databaseId, documents) {
+    async indexDirect(databaseId, documents, chunking) {
+      const body = { documents, ...chunking === void 0 ? {} : { chunking } };
       const { data, error: error2, response } = await client.POST(
         "/flexible-vector-databases/{databaseID}/index-direct",
         {
           params: { path: { databaseID: databaseId } },
-          body: { documents }
+          body
         }
       );
       if (response.status !== 200) {
@@ -22836,13 +22870,32 @@ async function resolveDatabaseID(api, databaseId, databaseSlug) {
   }
   return id;
 }
-function* batchDocuments(items, batchSize) {
-  if (!Number.isInteger(batchSize) || batchSize < 1) {
-    throw new Error("batchSize must be a positive integer.");
+function* batchIndexDocuments(documents, batchSize, chunking, maxBytes = MAX_BATCH_BYTES) {
+  if (!Number.isInteger(batchSize) || batchSize < 1) throw new Error("batchSize must be a positive integer.");
+  const baseBytes = Buffer.byteLength(JSON.stringify({ documents: [], ...chunking === void 0 ? {} : { chunking } }), "utf8");
+  let batch = [];
+  let bytes = baseBytes;
+  let chunks = 0;
+  for (const document of documents) {
+    const documentBytes = Buffer.byteLength(JSON.stringify(document), "utf8");
+    if (baseBytes + documentBytes > maxBytes) throw new Error(`Document ${document.id} is too large for a single indexing request.`);
+    let chars = 0;
+    for (const _character of document.content) chars += 1;
+    const { size, overlap } = chunking ?? { size: 2e3, overlap: 200 };
+    const chunkCount = chars <= size ? 1 : 1 + Math.ceil((chars - size) / (size - overlap));
+    if (chunkCount > MAX_BATCH_CHUNKS) throw new Error(`Document ${document.id} would create too many chunks.`);
+    const added = documentBytes + (batch.length === 0 ? 0 : 1);
+    if (batch.length >= batchSize || bytes + added > maxBytes || chunks + chunkCount > MAX_BATCH_CHUNKS) {
+      yield batch;
+      batch = [];
+      bytes = baseBytes;
+      chunks = 0;
+    }
+    bytes += documentBytes + (batch.length === 0 ? 0 : 1);
+    chunks += chunkCount;
+    batch.push(document);
   }
-  for (let index = 0; index < items.length; index += batchSize) {
-    yield items.slice(index, index + batchSize);
-  }
+  if (batch.length > 0) yield batch;
 }
 function isTransient(error2) {
   if (error2 instanceof ApiError) {
@@ -22850,11 +22903,10 @@ function isTransient(error2) {
   }
   return true;
 }
-async function indexBatchWithRetry(api, databaseId, documents, sleep) {
+async function indexBatchWithRetry(api, databaseId, documents, sleep, chunking) {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      await api.indexDirect(databaseId, documents);
-      return;
+      return await api.indexDirect(databaseId, documents, chunking);
     } catch (error2) {
       if (!isTransient(error2) || attempt >= RETRY_DELAYS.length) {
         throw error2;
@@ -22864,16 +22916,26 @@ async function indexBatchWithRetry(api, databaseId, documents, sleep) {
   }
 }
 async function indexAll(api, databaseId, documents, batchSize, options = {}) {
-  const batches = [...batchDocuments(documents, batchSize)];
+  const batches = [...batchIndexDocuments(documents, batchSize, options.chunking)];
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   let indexed = 0;
+  let chunksIndexed = 0;
+  let hasChunkCounts = true;
   for (let index = 0; index < batches.length; index += 1) {
     const batch = batches[index];
     options.onBatch?.({ batch: index + 1, totalBatches: batches.length, size: batch.length });
-    await indexBatchWithRetry(api, databaseId, batch, sleep);
+    const response = await indexBatchWithRetry(api, databaseId, batch, sleep, options.chunking);
+    if (options.requireIndexedCount && (!isRecord(response) || response.indexed_count === void 0) || isRecord(response) && response.indexed_count !== void 0 && response.indexed_count !== batch.length) {
+      throw new Error(`index-direct returned an unexpected indexed_count for batch ${index + 1}.`);
+    }
     indexed += batch.length;
+    if (isRecord(response) && Number.isSafeInteger(response.chunks_indexed_count) && response.chunks_indexed_count >= 0) {
+      chunksIndexed += response.chunks_indexed_count;
+    } else {
+      hasChunkCounts = false;
+    }
   }
-  return { indexed, batches: batches.length };
+  return { indexed, batches: batches.length, ...hasChunkCounts && batches.length > 0 ? { chunksIndexed } : {} };
 }
 
 // src/summary.ts
@@ -22886,6 +22948,8 @@ function summaryMarkdown(summary2) {
     `- Documents sent: ${summary2.documents}`,
     `- Documents indexed: ${summary2.indexed}`
   ];
+  if (summary2.chunksIndexed !== void 0) lines.push(`- Chunks indexed: ${summary2.chunksIndexed}`);
+  if (summary2.removed !== void 0) lines.push(`- Documents removed: ${summary2.removed}`);
   if (summary2.skipped > 0) {
     lines.push(`- Empty files skipped: ${summary2.skipped}`);
   }
@@ -22897,7 +22961,82 @@ async function publishSummary(summary2) {
   setOutput("files", String(summary2.files));
   setOutput("documents", String(summary2.documents));
   setOutput("indexed", String(summary2.indexed));
+  setOutput("chunks-indexed", summary2.chunksIndexed === void 0 ? "" : String(summary2.chunksIndexed));
+  setOutput("removed", String(summary2.removed ?? 0));
   await summary.addRaw(summaryMarkdown(summary2)).write();
+}
+
+// src/cleanup.ts
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+async function cleanupDocuments(api, databaseId, options) {
+  if (!options.prune && !options.removeLegacy) return { removed: 0 };
+  if (options.prune && options.trackedPaths.length === 0) {
+    throw new Error("Refusing to prune because no matching tracked Markdown files were found.");
+  }
+  const tracked = new Set(options.trackedPaths);
+  const indexed = new Set(options.indexedPaths);
+  const toRemove = /* @__PURE__ */ new Set();
+  const cursors = /* @__PURE__ */ new Set();
+  let cursor;
+  do {
+    const response = await api.listDocuments(databaseId, cursor);
+    if (!isRecord2(response) || !Array.isArray(response.documents) || response.next_cursor !== void 0 && typeof response.next_cursor !== "string") {
+      throw new Error("Invalid document listing; no cleanup was performed.");
+    }
+    for (const doc of response.documents) {
+      if (!isRecord2(doc) || typeof doc.id !== "string" || typeof doc.parent_document_id !== "string" || doc.parent_document_id === "") {
+        throw new Error("Document listing does not expose chunk parent IDs; no cleanup was performed.");
+      }
+      if (!isRecord2(doc.metadata)) continue;
+      const { repo, ref, path: path2, action } = doc.metadata;
+      if (repo !== options.repository || ref !== options.ref || typeof path2 !== "string" || !matchesMarkdownPath(path2, options.include, options.exclude)) continue;
+      const root = documentId(path2);
+      if (options.prune && action === "qdivzero-gha-sync-retrieval" && doc.parent_document_id === root && !tracked.has(path2)) {
+        toRemove.add(root);
+      }
+      if (options.removeLegacy && (action === void 0 || action === "qdivzero-gha-sync-retrieval") && indexed.has(path2) && doc.id === doc.parent_document_id && /^\d+$/.test(doc.id.slice(root.length + 1)) && doc.id.startsWith(`${root}:`)) {
+        toRemove.add(doc.id);
+      }
+    }
+    const next = response.next_cursor;
+    if (typeof next !== "string" || next === "") break;
+    if (cursors.has(next)) throw new Error("Document listing returned a repeated cursor; no cleanup was performed.");
+    cursors.add(next);
+    cursor = next;
+  } while (true);
+  for (const id of toRemove) await api.purgeDocument(databaseId, id);
+  return { removed: toRemove.size };
+}
+function createCleanupApi(baseUrl, apiKey) {
+  const documentsUrl = (databaseId) => `${baseUrl}/flexible-vector-databases/${encodeURIComponent(databaseId)}/documents`;
+  async function request(url, method) {
+    let response;
+    try {
+      response = await fetch(url, { method, headers: { Authorization: `Bearer ${apiKey}` }, redirect: "error" });
+    } catch {
+      throw new Error(`Cleanup ${method} request failed.`);
+    }
+    if (!response.ok) throw new Error(`Cleanup ${method} request failed: HTTP ${response.status}.`);
+    return response;
+  }
+  return {
+    async listDocuments(databaseId, cursor) {
+      const url = new URL(documentsUrl(databaseId));
+      url.searchParams.set("limit", "50");
+      if (cursor) url.searchParams.set("cursor", cursor);
+      const response = await request(url.toString(), "GET");
+      try {
+        return await response.json();
+      } catch {
+        throw new Error("Cleanup document listing returned invalid JSON.");
+      }
+    },
+    async purgeDocument(databaseId, parentId) {
+      await request(`${documentsUrl(databaseId)}/${encodeURIComponent(parentId)}/chunks`, "DELETE");
+    }
+  };
 }
 
 // src/main.ts
@@ -22905,16 +23044,28 @@ async function run() {
   const inputs = readInputs();
   setSecret(inputs.apiKey);
   const context = readGitHubContext();
+  const baseUrl = versionedBaseUrl(inputs.baseUrl);
   const api = createRetrievalApi(
     createQDivZeroClient({
       apiKey: inputs.apiKey,
-      baseUrl: inputs.baseUrl,
+      baseUrl,
       loadCredentialsFile: false
     })
   );
   const databaseId = await resolveDatabaseID(api, inputs.databaseId, inputs.databaseSlug);
   const files = await listTrackedMarkdown(context.workspace, inputs.paths, inputs.exclude);
+  const cleanup = (indexedPaths) => cleanupDocuments(createCleanupApi(baseUrl, inputs.apiKey), databaseId, {
+    repository: context.repository,
+    ref: context.refName,
+    trackedPaths: files,
+    indexedPaths,
+    include: inputs.paths,
+    exclude: inputs.exclude,
+    prune: inputs.prune,
+    removeLegacy: inputs.removeLegacy
+  });
   if (files.length === 0) {
+    if (inputs.prune) throw new Error("Refusing to prune because no matching tracked Markdown files were found.");
     warning("No tracked Markdown files matched the configured paths or exclude patterns.");
     await publishSummary({
       databaseId,
@@ -22940,26 +23091,33 @@ async function run() {
   }
   if (documents.length === 0) {
     warning("No indexable Markdown content found.");
+    const { removed: removed2 } = inputs.prune ? await cleanup([]) : { removed: 0 };
     await publishSummary({
       databaseId,
       files: files.length,
       documents: 0,
       indexed: 0,
-      skipped
+      skipped,
+      removed: removed2
     });
     return;
   }
-  const { indexed } = await indexAll(api, databaseId, documents, inputs.batchSize, {
+  const { indexed, chunksIndexed } = await indexAll(api, databaseId, documents, inputs.batchSize, {
+    chunking: inputs.chunking,
+    requireIndexedCount: inputs.prune || inputs.removeLegacy,
     onBatch: ({ batch, totalBatches, size }) => {
       info(`Indexing batch ${batch}/${totalBatches} (${size} documents).`);
     }
   });
+  const { removed } = await cleanup(documents.map((doc) => doc.metadata.path));
   await publishSummary({
     databaseId,
     files: files.length,
     documents: documents.length,
     indexed,
-    skipped
+    skipped,
+    chunksIndexed,
+    removed
   });
 }
 run().catch((error2) => {

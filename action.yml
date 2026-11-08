@@ -28,6 +28,20 @@ inputs:
     description: Documents per index-direct request
     required: false
     default: "50"
+  chunk-size:
+    description: Optional maximum Unicode characters per chunk; requires chunk-overlap
+    required: false
+  chunk-overlap:
+    description: Optional overlap in Unicode characters; requires chunk-size
+    required: false
+  prune:
+    description: Delete previously synced documents whose tracked files were removed, within the selected paths
+    required: false
+    default: "false"
+  remove-legacy:
+    description: Remove identifiable legacy chunks after their files have been successfully indexed
+    required: false
+    default: "false"
 
 outputs:
   database-id:
@@ -38,6 +52,10 @@ outputs:
     description: Number of documents sent to the API
   indexed:
     description: Number of documents accepted by the API
+  chunks-indexed:
+    description: Number of chunks indexed when reported by the API
+  removed:
+    description: Number of document records removed during optional cleanup
 
 runs:
   using: node24
