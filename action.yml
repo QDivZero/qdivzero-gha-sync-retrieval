@@ -1,0 +1,50 @@
+name: QDivZero Sync Retrieval
+description: Index tracked Markdown files into a QDivZero Retrieval database
+author: QDivZero
+
+inputs:
+  api-key:
+    description: QDivZero API key
+    required: true
+  database-id:
+    description: Retrieval database ID. Mutually exclusive with database-slug.
+    required: false
+  database-slug:
+    description: Retrieval database slug. Mutually exclusive with database-id.
+    required: false
+  base-url:
+    description: QDivZero API base URL
+    required: false
+    default: https://api.qdiv0.com
+  paths:
+    description: Newline-separated glob patterns of Markdown files to include
+    required: false
+    default: ""
+  exclude:
+    description: Newline-separated glob patterns to exclude
+    required: false
+    default: ""
+  batch-size:
+    description: Documents per index-direct request
+    required: false
+    default: "50"
+  max-chunk-chars:
+    description: Maximum characters per grouped chunk
+    required: false
+    default: "4000"
+
+outputs:
+  database-id:
+    description: Resolved Retrieval database ID
+  files:
+    description: Number of Markdown files scanned
+  chunks:
+    description: Number of indexable chunks generated
+  indexed:
+    description: Number of documents accepted by the API
+  skipped:
+    description: Number of empty chunks skipped
+
+runs:
+  using: node24
+  main: dist/index.cjs
