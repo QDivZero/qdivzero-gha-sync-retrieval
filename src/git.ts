@@ -4,6 +4,12 @@ import { minimatch } from "minimatch";
 
 const execFileAsync = promisify(execFile);
 
+export function matchesMarkdownPath(file: string, include: string[], exclude: string[]): boolean {
+  if (!/\.md$/i.test(file)) return false;
+  const included = include.length === 0 || include.some((pattern) => minimatch(file, pattern, { dot: true }));
+  return included && !exclude.some((pattern) => minimatch(file, pattern, { dot: true }));
+}
+
 export async function listTrackedMarkdown(
   workspace: string,
   include: string[],
@@ -24,10 +30,6 @@ export async function listTrackedMarkdown(
     .split("\0")
     .filter((file) => file.length > 0 && /\.md$/i.test(file))
     .map((file) => file.replaceAll("\\", "/"))
-    .filter((file) => {
-      const included = include.length === 0 || include.some((pattern) => minimatch(file, pattern, { dot: true }));
-      if (!included) return false;
-      return !exclude.some((pattern) => minimatch(file, pattern, { dot: true }));
-    })
+    .filter((file) => matchesMarkdownPath(file, include, exclude))
     .sort();
 }

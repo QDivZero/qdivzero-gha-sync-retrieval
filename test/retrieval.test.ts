@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   batchDocuments,
+  batchIndexDocuments,
   indexAll,
   normalizeDatabaseList,
   resolveDatabaseID,
@@ -47,6 +48,26 @@ describe("batchDocuments", () => {
   });
 });
 
+describe("batchIndexDocuments", () => {
+  it("splits by UTF-8 request size as well as document count", () => {
+    const docs = [{ ...doc(1), content: "é".repeat(100) }, { ...doc(2), content: "é".repeat(100) }];
+    const oneSize = Buffer.byteLength(JSON.stringify({ documents: [docs[0]] }));
+    expect([...batchIndexDocuments(docs, 50, undefined, oneSize + 1)]).toEqual([[docs[0]], [docs[1]]]);
+  });
+
+  it("rejects a single oversized document before making requests", async () => {
+    const api = makeApi();
+    await expect(indexAll(api, "db", [{ ...doc(1), content: "x".repeat(13 * 1024 * 1024) }], 50)).rejects.toThrow(/too large/i);
+    expect(api.indexDirect).not.toHaveBeenCalled();
+  });
+
+  it("respects the API limit on the number of chunks in a request", () => {
+    const docs = [{ ...doc(1), content: "x".repeat(6000) }, { ...doc(2), content: "x".repeat(6000) }];
+    expect([...batchIndexDocuments(docs, 50, { size: 1, overlap: 0 })]).toEqual([[docs[0]], [docs[1]]]);
+    expect(() => [...batchIndexDocuments([{ ...doc(1), content: "x".repeat(10001) }], 50, { size: 1, overlap: 0 })]).toThrow(/too many chunks/i);
+  });
+});
+
 describe("resolveDatabaseID", () => {
   it("returns an explicit database id", async () => {
     const api = makeApi();
@@ -80,6 +101,22 @@ describe("resolveDatabaseID", () => {
 });
 
 describe("indexAll", () => {
+  it("passes server chunking to each index request and reports the API chunk count", async () => {
+    const api = makeApi({ indexDirect: vi.fn().mockResolvedValue({ indexed_count: 1, chunks_indexed_count: 3 }) });
+    const result = await indexAll(api, "db_1", [doc(1)], 10, { chunking: { size: 2000, overlap: 200 } });
+    expect(api.indexDirect).toHaveBeenCalledWith("db_1", [doc(1)], { size: 2000, overlap: 200 });
+    expect(result).toEqual({ indexed: 1, batches: 1, chunksIndexed: 3 });
+  });
+
+  it("fails if the API reports that a batch was not fully indexed", async () => {
+    const api = makeApi({ indexDirect: vi.fn().mockResolvedValue({ indexed_count: 0 }) });
+    await expect(indexAll(api, "db", [doc(1)], 1)).rejects.toThrow(/indexed_count/i);
+  });
+
+  it("requires an indexed count when cleanup depends on confirmed indexing", async () => {
+    const api = makeApi({ indexDirect: vi.fn().mockResolvedValue({}) });
+    await expect(indexAll(api, "db", [doc(1)], 1, { requireIndexedCount: true })).rejects.toThrow(/indexed_count/i);
+  });
   it("sends sequential batches and counts documents", async () => {
     const api = makeApi();
     const result = await indexAll(api, "db_1", [doc(1), doc(2), doc(3)], 2, {
