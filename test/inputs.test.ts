@@ -45,8 +45,7 @@ describe("readInputs", () => {
   });
 
   it("rejects neither database identifier", () => {
-    const env = { ...baseEnv };
-    delete env["INPUT_DATABASE-ID"];
+    const { "INPUT_DATABASE-ID": _databaseId, ...env } = baseEnv;
     expect(() => readInputs(env)).toThrow(/exactly one/i);
   });
 

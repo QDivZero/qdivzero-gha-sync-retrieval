@@ -41,7 +41,7 @@ function errorSuffix(error: unknown): string {
 export function createRetrievalApi(client: QDivZeroClient): RetrievalApi {
   return {
     async listDatabases(): Promise<unknown> {
-      const { data, error, response } = await client.GET("/v1/flexible-vector-databases");
+      const { data, error, response } = await client.GET("/flexible-vector-databases", {});
       if (response.status !== 200) {
         throw new ApiError(
           `Unable to list Retrieval databases: HTTP ${response.status}${errorSuffix(error)}`,
@@ -53,7 +53,7 @@ export function createRetrievalApi(client: QDivZeroClient): RetrievalApi {
 
     async indexDirect(databaseId: string, documents: IndexDocument[]): Promise<unknown> {
       const { data, error, response } = await client.POST(
-        "/v1/flexible-vector-databases/{databaseID}/index-direct",
+        "/flexible-vector-databases/{databaseID}/index-direct",
         {
           params: { path: { databaseID: databaseId } },
           body: { documents },
