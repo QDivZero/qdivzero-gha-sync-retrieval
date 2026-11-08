@@ -20339,8 +20339,7 @@ function readInputs(env = process.env) {
     baseUrl: normalizeBaseUrl(input(env, "base-url") || "https://api.qdiv0.com"),
     paths: parseLines(input(env, "paths")),
     exclude: parseLines(input(env, "exclude")),
-    batchSize: parseInteger(env, "batch-size", 50, 1, 200),
-    maxChunkChars: parseInteger(env, "max-chunk-chars", 4e3, 200, 1e6)
+    batchSize: parseInteger(env, "batch-size", 50, 1, 200)
   };
 }
 function readGitHubContext(env = process.env, cwd = process.cwd()) {
@@ -22706,157 +22705,31 @@ async function listTrackedMarkdown(workspace, include, exclude) {
   }).sort();
 }
 
-// src/markdown.ts
-function fileTitle(fileName) {
-  const base = fileName.split("/").pop() ?? fileName;
-  return base.replace(/\.md$/i, "") || base;
-}
-function groupSections(sections, maxChunkChars) {
-  const chunks = [];
-  let skipped = 0;
-  let oversizedSections = 0;
-  let current = [];
-  let currentLength = 0;
-  const flush = () => {
-    if (current.length === 0) return;
-    const content = current.map((section) => section.content).join("\n\n").replace(/^\n+|\n+$/g, "");
-    if (content.trim() === "") {
-      skipped += 1;
-      current = [];
-      currentLength = 0;
-      return;
-    }
-    if (current.length === 1 && currentLength > maxChunkChars) {
-      oversizedSections += 1;
-    }
-    const first = current[0];
-    chunks.push({
-      index: chunks.length,
-      headingPath: first.headingPath,
-      startLine: first.startLine,
-      content
-    });
-    current = [];
-    currentLength = 0;
-  };
-  const indexableSections = sections.filter((section) => {
-    if (section.content.trim() === "") {
-      skipped += 1;
-      return false;
-    }
-    return true;
-  });
-  for (const section of indexableSections) {
-    const sectionLength = section.content.length;
-    if (current.length === 0) {
-      current = [section];
-      currentLength = sectionLength;
-      continue;
-    }
-    const candidateLength = currentLength + 2 + sectionLength;
-    if (candidateLength > maxChunkChars) {
-      flush();
-      current = [section];
-      currentLength = sectionLength;
-    } else {
-      current.push(section);
-      currentLength = candidateLength;
-    }
-  }
-  flush();
-  return { chunks, skipped, oversizedSections };
-}
-function chunkMarkdown(source, fileName, maxChunkChars) {
-  if (!Number.isInteger(maxChunkChars) || maxChunkChars < 1) {
-    throw new Error("maxChunkChars must be a positive integer.");
-  }
-  const normalized = source.replace(/\r\n?/g, "\n").replace(/^\uFEFF/, "");
-  const lines = normalized.split("\n");
-  const sections = [];
-  const headingStack = [];
-  let fence = null;
-  let currentHeadingPath = [];
-  let currentStartLine = 1;
-  let currentLines = [];
-  let title = "";
-  let seenH1 = false;
-  const flushSection = () => {
-    if (currentLines.length === 0 && currentHeadingPath.length === 0) return;
-    sections.push({
-      headingPath: currentHeadingPath,
-      startLine: currentStartLine,
-      content: currentLines.join("\n")
-    });
-    currentLines = [];
-  };
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    const lineNumber = i + 1;
-    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (fence !== null) {
-      currentLines.push(line);
-      if (fenceMatch !== null && fenceMatch[1][0] === fence.char && fenceMatch[1].length >= fence.length && fenceMatch[2].trim() === "") {
-        fence = null;
-      }
-      continue;
-    }
-    if (fenceMatch !== null) {
-      fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
-      currentLines.push(line);
-      continue;
-    }
-    const headingMatch = line.match(/^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*#*[ \t]*$/);
-    const level = headingMatch === null ? 0 : headingMatch[1].length;
-    if (headingMatch !== null && level <= 3) {
-      flushSection();
-      const rawText = (headingMatch[2] ?? "").trim();
-      const pathText = rawText || "(untitled)";
-      while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
-        headingStack.pop();
-      }
-      headingStack.push({ level, text: pathText });
-      currentHeadingPath = headingStack.map((frame) => frame.text);
-      currentStartLine = lineNumber;
-      currentLines = [line];
-      if (level === 1 && !seenH1) {
-        seenH1 = true;
-        title = rawText;
-      }
-      continue;
-    }
-    currentLines.push(line);
-  }
-  flushSection();
-  return {
-    title: title || fileTitle(fileName),
-    ...groupSections(sections, maxChunkChars)
-  };
-}
-
 // src/documents.ts
 var import_node_crypto = require("node:crypto");
 function encodePath(relativePath) {
   return relativePath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
 }
-function documentId(relativePath, chunkIndex) {
-  const hash = (0, import_node_crypto.createHash)("md5").update(relativePath).digest("hex");
-  return `${hash}:${chunkIndex}`;
+function fileTitle(relativePath) {
+  const base = relativePath.split("/").pop() ?? relativePath;
+  return base.replace(/\.md$/i, "") || base;
 }
-function buildDocuments(relativePath, chunked, context) {
-  return chunked.chunks.map((chunk) => ({
-    id: documentId(relativePath, chunk.index),
-    content: chunk.content,
+function documentId(relativePath) {
+  return (0, import_node_crypto.createHash)("md5").update(relativePath).digest("hex");
+}
+function buildDocument(relativePath, content, context) {
+  return {
+    id: documentId(relativePath),
+    content,
     metadata: {
       repo: context.repository,
       path: relativePath,
       ref: context.refName,
       commit: context.sha,
-      title: chunked.title,
-      heading: chunk.headingPath.length > 0 ? chunk.headingPath.join(" > ") : chunked.title,
-      chunk_index: String(chunk.index),
-      url: `${context.serverUrl}/${context.repository}/blob/${context.sha}/${encodePath(relativePath)}#L${chunk.startLine}`
+      title: fileTitle(relativePath),
+      url: `${context.serverUrl}/${context.repository}/blob/${context.sha}/${encodePath(relativePath)}`
     }
-  }));
+  };
 }
 
 // src/retrieval.ts
@@ -23009,12 +22882,11 @@ function summaryMarkdown(summary2) {
     "",
     `- Database: \`${summary2.databaseId}\``,
     `- Files scanned: ${summary2.files}`,
-    `- Chunks generated: ${summary2.chunks}`,
-    `- Documents indexed: ${summary2.indexed}`,
-    `- Empty chunks skipped: ${summary2.skipped}`
+    `- Documents sent: ${summary2.documents}`,
+    `- Documents indexed: ${summary2.indexed}`
   ];
-  if (summary2.oversizedSections > 0) {
-    lines.push(`- Oversized sections: ${summary2.oversizedSections}`);
+  if (summary2.skipped > 0) {
+    lines.push(`- Empty files skipped: ${summary2.skipped}`);
   }
   lines.push("");
   return lines.join("\n");
@@ -23022,9 +22894,8 @@ function summaryMarkdown(summary2) {
 async function publishSummary(summary2) {
   setOutput("database-id", summary2.databaseId);
   setOutput("files", String(summary2.files));
-  setOutput("chunks", String(summary2.chunks));
+  setOutput("documents", String(summary2.documents));
   setOutput("indexed", String(summary2.indexed));
-  setOutput("skipped", String(summary2.skipped));
   await summary.addRaw(summaryMarkdown(summary2)).write();
 }
 
@@ -23047,39 +22918,33 @@ async function run() {
     await publishSummary({
       databaseId,
       files: 0,
-      chunks: 0,
+      documents: 0,
       indexed: 0,
-      skipped: 0,
-      oversizedSections: 0
+      skipped: 0
     });
     return;
   }
-  let chunks = 0;
   let skipped = 0;
-  let oversizedSections = 0;
   const documents = [];
   for (const file of files) {
     const source = await (0, import_promises.readFile)((0, import_node_path2.join)(context.workspace, file), "utf8");
-    const chunked = chunkMarkdown(source, file, inputs.maxChunkChars);
-    chunks += chunked.chunks.length;
-    skipped += chunked.skipped;
-    oversizedSections += chunked.oversizedSections;
-    documents.push(...buildDocuments(file, chunked, context));
+    if (source.trim() === "") {
+      skipped += 1;
+      continue;
+    }
+    documents.push(buildDocument(file, source, context));
   }
-  if (oversizedSections > 0) {
-    warning(
-      `${oversizedSections} Markdown section(s) exceeded max-chunk-chars and were indexed without splitting.`
-    );
+  if (skipped > 0) {
+    warning(`${skipped} empty Markdown file(s) skipped.`);
   }
   if (documents.length === 0) {
     warning("No indexable Markdown content found.");
     await publishSummary({
       databaseId,
       files: files.length,
-      chunks,
+      documents: 0,
       indexed: 0,
-      skipped,
-      oversizedSections
+      skipped
     });
     return;
   }
@@ -23091,10 +22956,9 @@ async function run() {
   await publishSummary({
     databaseId,
     files: files.length,
-    chunks,
+    documents: documents.length,
     indexed,
-    skipped,
-    oversizedSections
+    skipped
   });
 }
 run().catch((error2) => {

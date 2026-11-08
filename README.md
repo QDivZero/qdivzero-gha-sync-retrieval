@@ -47,7 +47,6 @@ ID. Exactly one of the two inputs is required.
 | `paths` | No | all tracked `.md` | Newline-separated include globs. |
 | `exclude` | No | - | Newline-separated exclude globs. |
 | `batch-size` | No | `50` | Documents per `index-direct` request. |
-| `max-chunk-chars` | No | `4000` | Maximum characters per grouped chunk. |
 
 ## Outputs
 
@@ -55,34 +54,35 @@ ID. Exactly one of the two inputs is required.
 | --- | --- |
 | `database-id` | Resolved Retrieval database ID. |
 | `files` | Markdown files scanned. |
-| `chunks` | Indexable chunks generated. |
+| `documents` | Documents sent to the API. |
 | `indexed` | Documents accepted by the API. |
-| `skipped` | Empty chunks skipped. |
 
 ## How it works
 
 - Enumerates tracked Markdown with `git ls-files`.
-- Splits Markdown by H1-H3 headings, ignoring headings inside fenced code blocks.
-- Groups sections until `max-chunk-chars`; oversized sections are sent whole.
-- Uses `md5(relative_path):chunk_index` as the document ID.
+- Sends one document per file with `id = md5(relative_path)` and the full
+  Markdown content.
+- Adds file-level metadata: repository, path, ref, commit, title, and URL.
+- The Retrieval API handles heading detection, chunking, and chunk IDs.
+- Re-indexing the same document replaces its previous chunks.
+- Empty files are skipped.
 - Sends sequential batches to `index-direct` with retries on 429/5xx/network
   errors.
 - Publishes a step summary and the outputs above.
 
 ## Limitations
 
-- Upsert only. Deleting or renaming Markdown files can leave stale documents in
-  the database.
+- Deleting or renaming Markdown files can leave stale documents in the database
+  because the action does not delete documents.
 - If multiple repositories share one database, identical relative paths produce
   identical document IDs. Use one database per repository.
-- Setext headings are not recognized.
-- Sections larger than `max-chunk-chars` are sent whole and may be rejected by
-  the API or embedding model.
+- The Retrieval API must support server-side chunking and per-document chunk
+  replacement.
 
 ## Repository access
 
-This repository is private. Authorized caller repositories must be able to use
-private actions and reusable workflows from the QDivZero organization.
+This is a public action. Caller repositories can use it directly; no private
+action access configuration is required.
 
 ## CI and dist
 

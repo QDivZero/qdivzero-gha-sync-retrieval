@@ -15,7 +15,9 @@ describe("action contract", () => {
     expect(action.inputs["api-key"]?.required).toBe(true);
     expect(action.inputs["database-id"]).toBeDefined();
     expect(action.inputs["database-slug"]).toBeDefined();
+    expect(action.inputs["max-chunk-chars"]).toBeUndefined();
     expect(action.outputs["database-id"]).toBeDefined();
+    expect(action.outputs.documents).toBeDefined();
     expect(action.outputs.indexed).toBeDefined();
     expect(existsSync("dist/index.cjs")).toBe(true);
   });

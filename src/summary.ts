@@ -3,10 +3,9 @@ import * as core from "@actions/core";
 export interface SyncSummary {
   databaseId: string;
   files: number;
-  chunks: number;
+  documents: number;
   indexed: number;
   skipped: number;
-  oversizedSections: number;
 }
 
 export function summaryMarkdown(summary: SyncSummary): string {
@@ -15,12 +14,11 @@ export function summaryMarkdown(summary: SyncSummary): string {
     "",
     `- Database: \`${summary.databaseId}\``,
     `- Files scanned: ${summary.files}`,
-    `- Chunks generated: ${summary.chunks}`,
+    `- Documents sent: ${summary.documents}`,
     `- Documents indexed: ${summary.indexed}`,
-    `- Empty chunks skipped: ${summary.skipped}`,
   ];
-  if (summary.oversizedSections > 0) {
-    lines.push(`- Oversized sections: ${summary.oversizedSections}`);
+  if (summary.skipped > 0) {
+    lines.push(`- Empty files skipped: ${summary.skipped}`);
   }
   lines.push("");
   return lines.join("\n");
@@ -29,8 +27,7 @@ export function summaryMarkdown(summary: SyncSummary): string {
 export async function publishSummary(summary: SyncSummary): Promise<void> {
   core.setOutput("database-id", summary.databaseId);
   core.setOutput("files", String(summary.files));
-  core.setOutput("chunks", String(summary.chunks));
+  core.setOutput("documents", String(summary.documents));
   core.setOutput("indexed", String(summary.indexed));
-  core.setOutput("skipped", String(summary.skipped));
   await core.summary.addRaw(summaryMarkdown(summary)).write();
 }

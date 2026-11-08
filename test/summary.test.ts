@@ -6,26 +6,25 @@ describe("summaryMarkdown", () => {
     const markdown = summaryMarkdown({
       databaseId: "db_1",
       files: 3,
-      chunks: 5,
-      indexed: 5,
+      documents: 3,
+      indexed: 3,
       skipped: 1,
-      oversizedSections: 0,
     });
     expect(markdown).toContain("## QDivZero Retrieval sync");
     expect(markdown).toContain("`db_1`");
     expect(markdown).toContain("Files scanned: 3");
-    expect(markdown).toContain("Documents indexed: 5");
+    expect(markdown).toContain("Documents indexed: 3");
+    expect(markdown).toContain("Empty files skipped: 1");
   });
 
-  it("includes oversized sections when present", () => {
+  it("omits the skipped line when nothing was skipped", () => {
     const markdown = summaryMarkdown({
       databaseId: "db_1",
       files: 1,
-      chunks: 1,
+      documents: 1,
       indexed: 1,
       skipped: 0,
-      oversizedSections: 2,
     });
-    expect(markdown).toContain("Oversized sections: 2");
+    expect(markdown).not.toContain("Empty files skipped");
   });
 });
