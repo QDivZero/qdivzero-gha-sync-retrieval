@@ -62,7 +62,7 @@ ID. Exactly one of the two inputs is required.
 - Enumerates tracked Markdown with `git ls-files`.
 - Sends one document per file with `id = md5(relative_path)` and the full
   Markdown content.
-- Adds file-level metadata: repository, path, ref, commit, title, and URL.
+- Adds file-level metadata: action, repository, path, ref, commit, title, and URL.
 - The Retrieval API handles heading detection, chunking, and chunk IDs.
 - Re-indexing the same document replaces its previous chunks.
 - Empty files are skipped.

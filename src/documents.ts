@@ -29,6 +29,7 @@ export function buildDocument(
     id: documentId(relativePath),
     content,
     metadata: {
+      action: "qdivzero-gha-sync-retrieval",
       repo: context.repository,
       path: relativePath,
       ref: context.refName,

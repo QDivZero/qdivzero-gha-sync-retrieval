@@ -122,6 +122,7 @@ describe("action end to end", () => {
     expect(documents[0]).toMatchObject({
       id: expect.stringMatching(/^[a-f0-9]{32}$/),
       metadata: {
+        action: "qdivzero-gha-sync-retrieval",
         repo: "QDivZero/e2e-fixture",
         ref: "main",
         commit: "abc123",

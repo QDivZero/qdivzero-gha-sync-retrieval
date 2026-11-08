@@ -26,6 +26,7 @@ describe("buildDocument", () => {
     expect(document.id).toBe(documentId("docs/guide.md"));
     expect(document.content).toBe(content);
     expect(document.metadata).toEqual({
+      action: "qdivzero-gha-sync-retrieval",
       repo: "QDivZero/example",
       path: "docs/guide.md",
       ref: "main",
