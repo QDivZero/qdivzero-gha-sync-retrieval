@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { ChunkedMarkdown } from "./markdown.js";
 import type { GitHubContext } from "./inputs.js";
 
 export interface IndexDocument {
@@ -12,28 +11,30 @@ function encodePath(relativePath: string): string {
   return relativePath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
 }
 
-export function documentId(relativePath: string, chunkIndex: number): string {
-  const hash = createHash("md5").update(relativePath).digest("hex");
-  return `${hash}:${chunkIndex}`;
+function fileTitle(relativePath: string): string {
+  const base = relativePath.split("/").pop() ?? relativePath;
+  return base.replace(/\.md$/i, "") || base;
 }
 
-export function buildDocuments(
+export function documentId(relativePath: string): string {
+  return createHash("md5").update(relativePath).digest("hex");
+}
+
+export function buildDocument(
   relativePath: string,
-  chunked: ChunkedMarkdown,
+  content: string,
   context: GitHubContext,
-): IndexDocument[] {
-  return chunked.chunks.map((chunk) => ({
-    id: documentId(relativePath, chunk.index),
-    content: chunk.content,
+): IndexDocument {
+  return {
+    id: documentId(relativePath),
+    content,
     metadata: {
       repo: context.repository,
       path: relativePath,
       ref: context.refName,
       commit: context.sha,
-      title: chunked.title,
-      heading: chunk.headingPath.length > 0 ? chunk.headingPath.join(" > ") : chunked.title,
-      chunk_index: String(chunk.index),
-      url: `${context.serverUrl}/${context.repository}/blob/${context.sha}/${encodePath(relativePath)}#L${chunk.startLine}`,
+      title: fileTitle(relativePath),
+      url: `${context.serverUrl}/${context.repository}/blob/${context.sha}/${encodePath(relativePath)}`,
     },
-  }));
+  };
 }

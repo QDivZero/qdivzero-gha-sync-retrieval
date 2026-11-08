@@ -81,7 +81,6 @@ function runAction(): Promise<{ code: number | null; stdout: string; stderr: str
         "INPUT_DATABASE-SLUG": "e2e-docs",
         "INPUT_BASE-URL": baseUrl,
         "INPUT_BATCH-SIZE": "1",
-        "INPUT_MAX-CHUNK-CHARS": "200",
         GITHUB_WORKSPACE: repoDir,
         GITHUB_REPOSITORY: "QDivZero/e2e-fixture",
         GITHUB_REF_NAME: "main",
@@ -118,20 +117,23 @@ describe("action end to end", () => {
     expect(indexCalls.length).toBeGreaterThan(1);
     expect(indexCalls.every((call) => call.authorization === "Bearer tk_e2e.secret")).toBe(true);
 
-    const documents = indexCalls.flatMap((call) => (call.body as { documents: unknown[] }).documents);
-    expect(documents.length).toBeGreaterThanOrEqual(2);
+    const documents = indexCalls.flatMap((call) => (call.body as { documents: Array<{ id: string; content: string; metadata: Record<string, string> }> }).documents);
+    expect(documents).toHaveLength(2);
     expect(documents[0]).toMatchObject({
-      id: expect.stringMatching(/^[a-f0-9]{32}:\d+$/),
+      id: expect.stringMatching(/^[a-f0-9]{32}$/),
       metadata: {
         repo: "QDivZero/e2e-fixture",
         ref: "main",
         commit: "abc123",
       },
     });
+    expect(documents[0].metadata.chunk_index).toBeUndefined();
+    expect(documents.some((document) => document.content.includes("# Guide"))).toBe(true);
 
     const outputs = await readFile(outputFile, "utf8");
     expect(outputs).toContain("database-id<<");
     expect(outputs).toContain("db_e2e");
+    expect(outputs).toContain("documents<<");
     expect(outputs).toContain("indexed<<");
 
     const summary = await readFile(summaryFile, "utf8");

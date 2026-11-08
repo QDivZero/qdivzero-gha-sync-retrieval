@@ -13,7 +13,6 @@ export interface ActionInputs {
   paths: string[];
   exclude: string[];
   batchSize: number;
-  maxChunkChars: number;
 }
 
 export interface GitHubContext {
@@ -89,7 +88,6 @@ export function readInputs(env: NodeJS.ProcessEnv = process.env): ActionInputs {
     paths: parseLines(input(env, "paths")),
     exclude: parseLines(input(env, "exclude")),
     batchSize: parseInteger(env, "batch-size", 50, 1, 200),
-    maxChunkChars: parseInteger(env, "max-chunk-chars", 4000, 200, 1_000_000),
   };
 }
 

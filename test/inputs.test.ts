@@ -8,7 +8,6 @@ const baseEnv = {
   "INPUT_PATHS": "docs/**/*.md\nREADME.md\n\n",
   "INPUT_EXCLUDE": "docs/private/**",
   "INPUT_BATCH-SIZE": "25",
-  "INPUT_MAX-CHUNK-CHARS": "3000",
 };
 
 describe("readInputs", () => {
@@ -22,7 +21,6 @@ describe("readInputs", () => {
       paths: ["docs/**/*.md", "README.md"],
       exclude: ["docs/private/**"],
       batchSize: 25,
-      maxChunkChars: 3000,
     });
   });
 
@@ -32,7 +30,6 @@ describe("readInputs", () => {
     expect(inputs.paths).toEqual([]);
     expect(inputs.exclude).toEqual([]);
     expect(inputs.batchSize).toBe(50);
-    expect(inputs.maxChunkChars).toBe(4000);
     expect(inputs.databaseSlug).toBe("docs");
   });
 
@@ -51,7 +48,6 @@ describe("readInputs", () => {
 
   it("rejects invalid numeric inputs", () => {
     expect(() => readInputs({ ...baseEnv, "INPUT_BATCH-SIZE": "0" })).toThrow(/batch-size/i);
-    expect(() => readInputs({ ...baseEnv, "INPUT_MAX-CHUNK-CHARS": "199" })).toThrow(/max-chunk-chars/i);
   });
 
   it("rejects invalid base URLs", () => {

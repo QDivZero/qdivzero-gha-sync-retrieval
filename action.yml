@@ -28,22 +28,16 @@ inputs:
     description: Documents per index-direct request
     required: false
     default: "50"
-  max-chunk-chars:
-    description: Maximum characters per grouped chunk
-    required: false
-    default: "4000"
 
 outputs:
   database-id:
     description: Resolved Retrieval database ID
   files:
     description: Number of Markdown files scanned
-  chunks:
-    description: Number of indexable chunks generated
+  documents:
+    description: Number of documents sent to the API
   indexed:
     description: Number of documents accepted by the API
-  skipped:
-    description: Number of empty chunks skipped
 
 runs:
   using: node24
