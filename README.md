@@ -84,17 +84,25 @@ ID. Exactly one of the two inputs is required.
 This repository is private. Authorized caller repositories must be able to use
 private actions and reusable workflows from the QDivZero organization.
 
-## Development
+## CI and dist
+
+`dist/index.cjs` is committed because GitHub runs the action from the bundle.
+
+On every push, `.github/workflows/sync-dist.yml`:
+
+- runs typecheck, build, and tests;
+- commits `dist/index.cjs` if the bundle changed;
+- triggers CI on the rebuilt commit.
+
+You normally do not need to build `dist/` manually. For a local check:
 
 ```bash
 npm ci
 npm run typecheck
 npm run build
 npm test
+git diff --exit-code -- dist
 ```
 
-`dist/index.cjs` is committed. Rebuild and commit it whenever `src/` changes.
-
-```bash
-npm run build && git diff --exit-code -- dist
-```
+If branch protection blocks `github-actions[bot]`, allow the bot to push or run
+the build manually and commit `dist/index.cjs`.

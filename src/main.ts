@@ -26,7 +26,7 @@ export async function run(): Promise<void> {
   const files = await listTrackedMarkdown(context.workspace, inputs.paths, inputs.exclude);
 
   if (files.length === 0) {
-    core.warning("No tracked Markdown files matched the configured paths.");
+    core.warning("No tracked Markdown files matched the configured paths or exclude patterns.");
     await publishSummary({
       databaseId,
       files: 0,
