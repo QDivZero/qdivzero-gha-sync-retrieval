@@ -10,8 +10,9 @@ character windows; it does not split on Markdown headings or code blocks.
 
 ## Releases
 
-- `@v1`: current major release. Recommended for normal use.
-- `@v1.0.0`: immutable release.
+- `v2.0.0`: current release. Recommended for normal use. See the
+  [v2.0.0 release notes](https://github.com/QDivZero/qdivzero-gha-sync-retrieval/releases/tag/v2.0.0)
+  for the chunked API and cleanup changes.
 
 For stricter supply-chain control, pin the action to the release commit SHA.
 
@@ -47,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: QDivZero/qdivzero-gha-sync-retrieval@v1
+      - uses: QDivZero/qdivzero-gha-sync-retrieval@v2.0.0
         with:
           api-key: ${{ secrets.QDIVZERO_API_KEY }}
           database-slug: my-repo-docs
