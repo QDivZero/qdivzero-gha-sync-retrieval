@@ -23043,7 +23043,7 @@ async function run() {
   const databaseId = await resolveDatabaseID(api, inputs.databaseId, inputs.databaseSlug);
   const files = await listTrackedMarkdown(context.workspace, inputs.paths, inputs.exclude);
   if (files.length === 0) {
-    warning("No tracked Markdown files matched the configured paths.");
+    warning("No tracked Markdown files matched the configured paths or exclude patterns.");
     await publishSummary({
       databaseId,
       files: 0,
